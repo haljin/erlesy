@@ -32,7 +32,7 @@ edges_to_dot(G, [E|T]) ->
 
 
 digraph_to_plantuml(Name, G) ->
-  "@startuml\n"  ++ "state init\n" ++
+  "@startuml\n"  ++ 
     edges_to_plantuml(G, digraph:edges(G)) ++
     "@enduml".
 
@@ -53,11 +53,11 @@ edges_to_plantuml(G, [E|T]) ->
   %EdgePretty=lists:flatten(R),
   case R of
     [[]] ->
-      atom_to_list(VLabel1) ++ "-->" ++ atom_to_list(VLabel2) ++
+      statename(VLabel1) ++ "-->" ++ statename(VLabel2) ++
         "\n" ++
         edges_to_plantuml(G, T);
     _ ->
-      atom_to_list(VLabel1) ++ "-->" ++ atom_to_list(VLabel2) ++
+      statename(VLabel1) ++ "-->" ++ statename(VLabel2) ++
         " : " ++ R ++
         "\n" ++
         edges_to_plantuml(G, T)

@@ -87,7 +87,7 @@ handle_cast({create, FileName, IncludeFiles, dot}, State) ->
   file:close(File),
   {noreply, State};
 handle_cast({create, FileName, IncludeFiles, plantuml}, State) ->
-  {ok, File} = file:open(filename:rootname(FileName) ++ "txt", [write]),
+  {ok, File} = file:open(filename:rootname(FileName) ++ ".txt", [write]),
   {parsed, _, Digraph} = graph_builder:parse_file(FileName, IncludeFiles),
   file:write(File, dot:digraph_to_plantuml(filename:rootname(FileName), Digraph)),
   file:close(File),

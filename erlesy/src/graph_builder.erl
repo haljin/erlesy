@@ -232,7 +232,7 @@ parse_gen_fsm(TokenList) ->
   lists:foreach(fun(Vertex) ->
                   V = digraph:add_vertex(Graph),
                   digraph:add_vertex(Graph, V, Vertex)
-                end, States),
+                end, lists:usort(States)),
   lists:foreach(fun({edge, From, To, Data}) ->
                   %io:format("~p~n", [{edge, From, To}]),
                   digraph:add_edge(Graph, get_vertex(Graph, From), get_vertex(Graph,To), Data)

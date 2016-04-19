@@ -38,7 +38,7 @@ d3.json("example_fsm.json", function(error, graph) {
   if (error) throw error;
   var edges = [];
 find_vertex = function(name, vertices) {
-	for(i = 0; i < name.length; i++)
+	for(i = 0; i < vertices.length; i++)
 		if(vertices[i].name == name)
 			return i;
 	return -1;

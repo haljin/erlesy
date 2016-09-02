@@ -11,3 +11,7 @@ rel/example_project
 .rebar
 *.iml
 *.json
+_build
+output
+rebar.lock
+

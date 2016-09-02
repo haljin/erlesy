@@ -6,7 +6,7 @@
 -export([start_link/0,
   parse_file/2]).
 
--export([test/0, test2/0]).
+-export([test/0, test/1, parse_statement/1]).
 %% gen_server callbacks
 -export([init/1,
   handle_call/3,
@@ -41,18 +41,15 @@ start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 test() ->
+  test(1).
+
+test(1) ->
   {ok, File} = file:open("output", [write]),
   start_link(),
-  {_,_,Graph} = parse_file("mobile.erl", []),
+  {_,_,Graph} = parse_file("test/example_fsm.erl", []),
   io:format(File, "~s~n", [dot:digraph_to_dot("test", Graph)]),
   file:close(File).
 
-test2() ->
-  {ok, File} = file:open("output2", [write]),
-  start_link(),
-  {_,_,Graph} = parse_file("vm_control.erl", []),
-  io:format(File, "~s~n", [dot:digraph_to_dot("test", Graph)]),
-  file:close(File).
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -206,6 +203,7 @@ parse_gen_fsm(TokenList) ->
                {OldNodes, OldEdges, OldAllStates ++ NewEdges}
            end;
         {function, _, FnName, 2, Clauses} ->
+          %io:format("CLAUSES ~w for ASYNC FUNCTION ~w~n", [Clauses, FnName]),
            case parse_function(Clauses, FnName, [async], gen_fsm) of
              {error, _Reason} ->
                {OldNodes, OldEdges, OldAllStates};
@@ -213,6 +211,7 @@ parse_gen_fsm(TokenList) ->
               {[FnName|OldNodes], OldEdges ++ NewEdges, OldAllStates}
              end;
         {function, _, FnName, 3, Clauses} ->
+          %io:format("CLAUSES ~w for SYNC FUNCTION ~w~n", [Clauses, FnName]),
           case parse_function(Clauses, FnName, [sync], gen_fsm) of
             {error, _Reason} ->
               {OldNodes, OldEdges, OldAllStates};
@@ -223,20 +222,16 @@ parse_gen_fsm(TokenList) ->
           {OldNodes, OldEdges, OldAllStates}
       end
     end, {[init, terminate],[],[]}, TokenList),
-  %io:format("~p~n", [States]),
-%%   lists:foreach(fun({edge, From, To, Data}) ->
-%%     io:format("~p~n", [{edge, From, To, Data#graph_edge.event}])
-%%   end, AllStateEdges),
-  NewAllStateEdges = expand_allstates(AllStateEdges, States),
+  NewAllStateEdges = expand_allstates(AllStateEdges, ['"*"']),%States),
+
   %io:format("~p~n", [NewAllStateEdges]),
   lists:foreach(fun(Vertex) ->
                   V = digraph:add_vertex(Graph),
                   digraph:add_vertex(Graph, V, Vertex)
-                end, lists:usort(States)),
-  lists:foreach(fun({edge, From, To, Data}) ->
-                  %io:format("~p~n", [{edge, From, To}]),
+                end, lists:usort(['"*"'|States])),
+  lists:foreach(fun(#edge{vertex1 = From, vertex2 = To, edge_data = Data}) ->
                   digraph:add_edge(Graph, get_vertex(Graph, From), get_vertex(Graph,To), Data)
-                end, Edges ++ NewAllStateEdges),
+                end, remove_dups(Edges ++ NewAllStateEdges)),
   {parsed, gen_fsm, Graph}.
 
 parse_gen_event(_TokenList) ->
@@ -244,24 +239,22 @@ parse_gen_event(_TokenList) ->
 
 parse_function(Clauses, FnName, Options, Type) ->
   Edges = lists:foldl(fun(Clause, AccIn) ->
-               [parse_clause(Clause, FnName, Options, Type) | AccIn]
+               [parse_function_clause(Clause, FnName, Options, Type) | AccIn]
               end, [], Clauses),
-  io:format("For function ~p~n", [FnName]),
-%%   lists:foreach(fun(E) ->
-%%     case E of
-%%       {edge, From, To, Data} ->
-%%         io:format("~p ~s ~n", [{edge, From, To}, Data#graph_edge.event]);
-%%       Other ->
-%%         io:format("~p~n", [Other])
-%%     end end, Edges),
+  FlatEdges = lists:flatten(Edges),
+  %io:format("For function ~p~n", [FnName]),
+  % lists:foreach(fun(E) ->
+  %       io:format(">>> ~p~n", [E])
+  %   end, FlatEdges),
+
   case lists:any(fun (El) -> {error, bad_transition} == El end, Edges) of
     false ->
-      lists:flatten(Edges);
+      FlatEdges;
     true ->
       {error, not_a_state}
   end.
 
-parse_clause({clause, _Line, Args, Guards, Body}, init, _Options, Type) ->
+parse_function_clause({clause, _Line, Args, Guards, Body}, init, _Options, Type) ->
   case eval_return(parse_body(Body), Type, []) of
     {error, _Reason} ->
       {error, bad_transition};
@@ -271,11 +264,21 @@ parse_clause({clause, _Line, Args, Guards, Body}, init, _Options, Type) ->
           PrettyGuards = lists:map(fun(G) -> erl_pp:guard(G) end, Guards),
           PrettyBody = erl_pp:exprs(Body),
           PrettyArgs = erl_pp:exprs(Args),
-          {edge, init, NextState, #graph_edge{event = "", args = PrettyArgs, pattern = Args, guard = PrettyGuards,
-          code = PrettyBody, attributes = [async]}}
+          #edge{
+            vertex1 = init,
+            vertex2 = NextState,
+            edge_data =
+            #edge_data{
+              event = "",
+              args = PrettyArgs,
+              pattern = Args,
+              guard = PrettyGuards,
+              code = PrettyBody,
+              attributes = [async]}
+          }
         end, List)
   end;
-parse_clause({clause, _Line, [Event | Args], Guards, Body}, handle_info, Options, Type) ->
+parse_function_clause({clause, _Line, [Event | Args], Guards, Body}, handle_info, Options, Type) ->
   case eval_return(parse_body(Body), Type, []) of
     {error, _Reason} ->
       {error, bad_transition};
@@ -286,11 +289,21 @@ parse_clause({clause, _Line, [Event | Args], Guards, Body}, handle_info, Options
           PrettyBody = erl_pp:exprs(Body),
           PrettyEvent = erl_pp:expr(Event),
           PrettyArgs = erl_pp:exprs(Args),
-          {edge, handle_info, NextState, #graph_edge{event = PrettyEvent, args = PrettyArgs, pattern = Args, guard = PrettyGuards,
-          code = PrettyBody, attributes = [RetType|Options]}}
+          #edge{
+            vertex1 = handle_info,
+            vertex2 = NextState,
+            edge_data =
+            #edge_data{
+              event = PrettyEvent,
+              args = PrettyArgs,
+              pattern = Args,
+              guard = PrettyGuards,
+              code = PrettyBody,
+              attributes = [RetType|Options]}
+          }
         end, List)
   end;
-parse_clause({clause, _Line, [Event | Args], Guards, Body}, FnName, Options, Type) ->
+parse_function_clause({clause, _Line, [Event | Args], Guards, Body}, FnName, Options, Type) ->
   case eval_return(parse_body(Body), Type, []) of
     {error, _Reason} ->
       {error, bad_transition};
@@ -301,10 +314,23 @@ parse_clause({clause, _Line, [Event | Args], Guards, Body}, FnName, Options, Typ
           PrettyBody = erl_pp:exprs(Body),
           PrettyEvent = erl_pp:expr(Event),
           PrettyArgs = erl_pp:exprs(Args),
-          {edge, FnName, NextState, #graph_edge{event = PrettyEvent, args = PrettyArgs, pattern = Args, guard = PrettyGuards,
-          code = PrettyBody, attributes = Options}}
+          #edge{
+            vertex1 = FnName,
+            vertex2 = NextState,
+            edge_data =
+            #edge_data{
+              event = PrettyEvent,
+              args = PrettyArgs,
+              pattern = Args,
+              guard = PrettyGuards,
+              code = PrettyBody,
+              attributes = Options}
+          }
         end, List)
   end.
+
+%process_body({ok. PrevState, NextState, }) ->
+
 
 parse_body(Body) ->
   parse_body(Body, []).
@@ -317,6 +343,11 @@ parse_body([], Acc) ->
 
 parse_statement({tuple, Line, Elems}) ->
   {tuple, Line, Elems};
+parse_statement(S={'case', Line, Op, Clauses}) ->
+  io:format("Nick wants: ~w~n", [{'case', Line, Op, Clauses}]),
+  lists:map(fun(Index) ->
+    parse_statement(element(Index, S))
+            end, lists:seq(1, size(S)));
 parse_statement(Statement) when is_tuple(Statement) ->
   lists:map(fun(Index) ->
     parse_statement(element(Index, Statement))
@@ -377,7 +408,7 @@ eval_tuple(_Other)->
 expand_allstates(Edges, States) ->
   ClearStates = lists:delete(init, lists:delete(terminate, States)),
   lists:foldl(fun(Edge, Acc) ->
-    {edge, FnName, To, Data} = Edge,
+    #edge{vertex1 = FnName, vertex2 = To, edge_data = Data} = Edge,
     StateIndex = case FnName of
                    handle_event ->  1;
                    handle_sync_event -> 2;
@@ -385,24 +416,24 @@ expand_allstates(Edges, States) ->
                  end,
     case To of
       '@var' ->
-        case lists:nth(StateIndex, Data#graph_edge.pattern) of
+        case lists:nth(StateIndex, Data#edge_data.pattern) of
           {atom, _line, StateFrom} ->
             Acc ++ lists:map(fun(State) ->
-              {edge, StateFrom, State, Data}
+              #edge{vertex1 = StateFrom, vertex2 = State, edge_data = Data}
             end, ClearStates);
           _ ->
             Acc ++ lists:map(fun(State) ->
-              {edge, State, State, Data}
+              #edge{vertex1 = State, vertex2 = State, edge_data = Data}
             end, ClearStates)
         end;
       Other ->
-        case lists:nth(StateIndex, Data#graph_edge.pattern) of
+        case lists:nth(StateIndex, Data#edge_data.pattern) of
           {atom, _line, StateFrom} ->
             Acc ++
-              [{edge, StateFrom, Other, Data}];
+              [#edge{vertex1 = StateFrom, vertex2 = Other, edge_data = Data}];
           _ ->
             Acc ++ lists:map(fun(State) ->
-              {edge, State, Other, Data}
+              #edge{vertex1 = State, vertex2 = Other, edge_data = Data}
             end, ClearStates)
         end
     end
@@ -421,3 +452,10 @@ find_label(Label, [V|Rest], Graph) ->
   end;
 find_label(_, [], _) ->
   {error, no_label}.
+
+remove_dups([])    -> [];
+remove_dups([H|T]) -> [H | [X || X <- remove_dups(T), X /= H]].
+
+
+abstract_print(Form) ->
+  erl_prettypr:format(erl_syntax:form_list([Form])).

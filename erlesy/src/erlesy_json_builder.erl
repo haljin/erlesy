@@ -23,11 +23,11 @@ parse_edge(Edge, Digraph) ->
   {_, V1, V2, EdgeInfo} = digraph:edge(Digraph, Edge),
   {_, V1Label} = digraph:vertex(Digraph, V1),
   {_, V2Label} = digraph:vertex(Digraph, V2),
-  EdgeLabel = case EdgeInfo#graph_edge.guard of
+  EdgeLabel = case EdgeInfo#edge_data.guard of
                 [] ->
-                  io_lib:format("~s", [EdgeInfo#graph_edge.event]);
+                  io_lib:format("~s", [EdgeInfo#edge_data.event]);
                 Guard ->
-                  io_lib:format("~s [~s]", [EdgeInfo#graph_edge.event, Guard])
+                  io_lib:format("~s [~s]", [EdgeInfo#edge_data.event, Guard])
               end,
   TrimmedLabel = list_to_binary(lists:flatten(EdgeLabel)),
   [{source, V1Label}, {target, V2Label}, {label, TrimmedLabel}].

@@ -17,9 +17,8 @@
 
 -include("types.hrl").
 -define(SERVER, ?MODULE).
-
--record(state, {                                     l
-}).
+-define(EXPAND_FLAG, true).
+-record(state,{}).
 
 %% TODO gen_server and gen_event
 %% TODO add filtering for graphs?
@@ -222,12 +221,18 @@ parse_gen_fsm(TokenList) ->
           {OldNodes, OldEdges, OldAllStates}
       end
     end, {[init, terminate],[],[]}, TokenList),
-  NewAllStateEdges = expand_allstates(AllStateEdges, ['"*"']),%States),
+  {ExpAllStates, Expansion} = case ?EXPAND_FLAG of
+				true ->
+					{States, States};
+				false ->
+					{["*" | States], ["*"]}
+			      end,
+  NewAllStateEdges = expand_allstates(AllStateEdges, Expansion),%States),
   %io:format("~p~n", [NewAllStateEdges]),
   lists:foreach(fun(Vertex) ->
                   V = digraph:add_vertex(Graph),
                   digraph:add_vertex(Graph, V, Vertex)
-                end, lists:usort(['"*"'|States])),
+                end, lists:usort(ExpAllStates)),
   lists:foreach(fun(#edge{vertex1 = From, vertex2 = To, edge_data = Data}) ->
                   digraph:add_edge(Graph, get_vertex(Graph, From), get_vertex(Graph,To), Data);
 (_) -> ok

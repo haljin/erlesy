@@ -205,7 +205,7 @@ parse_gen_fsm(TokenList) ->
         {function, _, FnName, 2, Clauses} ->
           %io:format("CLAUSES ~w for ASYNC FUNCTION ~w~n", [Clauses, FnName]),
            case parse_function(Clauses, FnName, [async], gen_fsm) of
-             {error, _Reason} ->
+             {error, Reason} ->
                {OldNodes, OldEdges, OldAllStates};
              NewEdges ->
               {[FnName|OldNodes], OldEdges ++ NewEdges, OldAllStates}
@@ -223,14 +223,14 @@ parse_gen_fsm(TokenList) ->
       end
     end, {[init, terminate],[],[]}, TokenList),
   NewAllStateEdges = expand_allstates(AllStateEdges, ['"*"']),%States),
-
   %io:format("~p~n", [NewAllStateEdges]),
   lists:foreach(fun(Vertex) ->
                   V = digraph:add_vertex(Graph),
                   digraph:add_vertex(Graph, V, Vertex)
                 end, lists:usort(['"*"'|States])),
   lists:foreach(fun(#edge{vertex1 = From, vertex2 = To, edge_data = Data}) ->
-                  digraph:add_edge(Graph, get_vertex(Graph, From), get_vertex(Graph,To), Data)
+                  digraph:add_edge(Graph, get_vertex(Graph, From), get_vertex(Graph,To), Data);
+(_) -> ok
                 end, remove_dups(Edges ++ NewAllStateEdges)),
   {parsed, gen_fsm, Graph}.
 
@@ -247,7 +247,7 @@ parse_function(Clauses, FnName, Options, Type) ->
   %       io:format(">>> ~p~n", [E])
   %   end, FlatEdges),
 
-  case lists:any(fun (El) -> {error, bad_transition} == El end, Edges) of
+  case lists:all(fun (El) -> {error, bad_transition} == El end, Edges) of
     false ->
       FlatEdges;
     true ->
@@ -344,7 +344,6 @@ parse_body([], Acc) ->
 parse_statement({tuple, Line, Elems}) ->
   {tuple, Line, Elems};
 parse_statement(S={'case', Line, Op, Clauses}) ->
-  io:format("Nick wants: ~w~n", [{'case', Line, Op, Clauses}]),
   lists:map(fun(Index) ->
     parse_statement(element(Index, S))
             end, lists:seq(1, size(S)));

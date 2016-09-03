@@ -1,39 +1,88 @@
-// TODO: Index multiple selv-loops to make them different size OR collate them together in erl part and display as event | another_event
-// TODO: Degree centraliy - node size (out degree is the interesting one)
-
-
 var width = 1920,
     height = 1024;
 
 var color = d3.scale.category20();
 
+var sizeScale = d3.scale.linear().domain([1, 20]).range([40, 100]).clamp(true);
 var force = d3.layout.force()
-    .charge(-5000)
-    .linkDistance(150)
+    .charge(-7500)
+    .linkDistance(250)
     .size([width, height]);
+
+var x = d3.scale.ordinal()
+    .rangeRoundBands([0, width], .1, .3);
 
 var svg = d3.select("body").append("svg")
     .attr("width", width)
     .attr("height", height);
 
+
+function wrap(text, width) {
+    text.each(function() {
+        var text = d3.select(this),
+            words = text.text().split("|").reverse(),
+            word,
+            line = [],
+            lineNumber = 0,
+            lineHeight = 1.1, // ems
+            y = text.attr("y"),
+            dy = parseFloat(text.attr("dy")),
+            tspan = text.text(null).append("tspan").attr("x", 0).attr("y", y).attr("dy", dy + "em");
+        while (word = words.pop()) {
+            line.push(word);
+            tspan.text(line.join(" "));
+            if (tspan.node().getComputedTextLength() > width) {
+                line.pop();
+                tspan.text(line.join(" "));
+                line = [word];
+                tspan = text.append("tspan").attr("x", 0).attr("y", y).attr("dy", ++lineNumber * lineHeight + dy + "em").text(word);
+            }
+        }
+    });
+}
+
 d3.json("example_fsm.json", function(error, graph) {
     if (error) throw error;
     var edges = [];
-    find_vertex = function(name, vertices) {
+    find_vertex = function(name, vertices, isSource = false) {
         for (i = 0; i < vertices.length; i++)
-            if (vertices[i].name == name)
+            if (vertices[i].name == name) {
+                if (isSource)
+                    vertices[i].outDegree = vertices[i].outDegree ? vertices[i].outDegree + 1 : 1;
                 return i;
+            }
         return -1;
     };
-    graph.edges.forEach(function(e) {
 
+    collapse_edge = function(from, to, label, edges) {
+        for (i = 0; i < edges.length; i++) {
+            if (edges[i].source == from && edges[i].target == to) {
+                edges[i].label += (" | " + label);
+                return;
+            }
+
+        }
         edges.push({
-            source: find_vertex(e.source,
-                graph.vertices),
-            target: find_vertex(e.target,
-                graph.vertices),
-            label: e.label
+            source: from,
+            target: to,
+            label: label
         });
+        return;
+    }
+
+    graph.edges.forEach(function(e) {
+        var from = find_vertex(e.source,
+            graph.vertices, true);
+        var to = find_vertex(e.target,
+            graph.vertices);
+        if (from == to)
+            collapse_edge(from, to, e.label, edges);
+        else
+            edges.push({
+                source: from,
+                target: to,
+                label: e.label
+            });
     });
 
     force
@@ -51,6 +100,7 @@ d3.json("example_fsm.json", function(error, graph) {
         .style("stroke-width", 2);
 
     linkGroups.append("text")
+	.attr("class", "eventText")
         .text(function(d) {
             return d.label;
         });
@@ -59,25 +109,64 @@ d3.json("example_fsm.json", function(error, graph) {
         .data(graph.vertices)
         .enter().append("g")
         .attr("class", "nodeGroup")
+        .attr("id", function(d) {
+            return d.name;
+        })
         .call(force.drag);
 
     groups.append("circle")
         .attr("class", "node")
-        .attr("r", 30)
+        .attr("r", function(d) {
+            if (!d.outDegree) return 30;
+            return sizeScale(d.outDegree);
+        })
         .attr("cx", 0)
         .attr("cy", 0)
-        .style("fill", color(1));
+        .style("fill", color(1))
+        .style("visibility", function(d) {
+            if (d.name == "init" || d.name == "terminate")
+                return "hidden";
+            else
+                return "visible"
+        });
+
+    svg.select("#init")
+        .append("circle")
+        .attr("class", "node")
+        .attr("r", 20)
+        .attr("cx", 0)
+        .attr("cy", 0)
+        .style("fill", "black")
+
+    svg.select("#terminate")
+        .append("circle")
+        .attr("class", "node")
+        .attr("r", 25)
+        .attr("cx", 0)
+        .attr("cy", 0)
+        .style("stroke", "black")
+        .style("stroke-width", "1px")
+        .style("fill", "none")
+
+    svg.select("#terminate")
+        .append("circle")
+        .attr("class", "node")
+        .attr("r", 20)
+        .attr("cx", 0)
+        .attr("cy", 0)
+        .style("fill", "black")
 
     groups.append("text")
         .text(function(d) {
-            return d.name;
+            if (d.name != "init" && d.name != "terminate")
+                return d.name;
+            else
+                return "";
         })
         .attr("x", 0)
         .attr("y", 0);
 
-
     force.on("tick", function() {
-
         linkGroups.selectAll("path").attr("d",
             function(d) {
                 var x1 = d.source.x,
@@ -109,8 +198,8 @@ d3.json("example_fsm.json", function(error, graph) {
 
                     // Make drx and dry different to get an ellipse
                     // instead of a circle.
-                    drx = 30;
-                    dry = 20;
+                    drx = 60;
+                    dry = 40;
 
                     // For whatever reason the arc collapses to a point if the beginning
                     // and ending points of the arc are the same, so kludge it.
@@ -126,25 +215,13 @@ d3.json("example_fsm.json", function(error, graph) {
             });
 
 
-        //    linkGroups.selectAll("line").attr("x1", function(d) { return d.source.x; })
-        //        .attr("y1", function(d) { return d.source.y; })
-        //        .attr("x2", function(d) { return d.target.x; })
-        //        .attr("y2", function(d) { return d.target.y; });
 
-        linkGroups.selectAll("text")
-            .attr("x", function(d) {
+        linkGroups.selectAll(".eventText")
+            .attr("transform", function(d) {
                 if (d.source.x == d.target.x)
-                    return d.source.x + 25;
+                    return "translate(" + (d.source.x + 25) + "," + (d.source.y - 45) + ")";
                 else
-                    return (d.source.x + d.target
-                        .x) / 2;
-            })
-            .attr("y", function(d) {
-                if (d.source.y == d.target.y)
-                    return d.source.y - 45;
-                else
-                    return (d.source.y + d.target
-                        .y) / 2;
+                    return "translate(" + ((d.source.x + d.target.x) / 2) + "," + ((d.source.y + d.target.y) / 2) + ")";
             });
 
 
@@ -153,4 +230,4 @@ d3.json("example_fsm.json", function(error, graph) {
                 d.y + ")";
         });
     });
-}); 
+});

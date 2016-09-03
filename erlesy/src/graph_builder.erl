@@ -18,12 +18,11 @@
 -include("types.hrl").
 -define(SERVER, ?MODULE).
 
--record(state, {                                     l
-}).
+-record(state, {}).
 
-%% TODO gen_server and gen_event
-%% TODO add filtering for graphs?
-%% TODO make this into an app
+%% @TODO gen_server and gen_event
+%% @TODO add filtering for graphs?
+%% @TODO make this into an app
 
 %%%===================================================================
 %%% API
@@ -171,115 +170,123 @@ parse_gen_server(_TokenList) ->
 
 parse_gen_fsm(TokenList) ->
   Graph = digraph:new(),
-  {States, Edges, AllStateEdges} = lists:foldl(
-    fun(Token, {OldNodes, OldEdges, OldAllStates}) ->
+  {Verts, Edges} = lists:foldl(
+    fun(Token, {OldVerts, OldEdges}) ->
       case Token of
-        {function, _, init, 1, Clauses} ->
-          case parse_function(Clauses, init, [async], gen_fsm) of
+        {function, _, FunctionName, ParamCount, Clauses} ->
+
+          case parse_gen_fsm__function(Clauses, FunctionName, ParamCount) of
             {error, _Reason} ->
-              {OldNodes, OldEdges, OldAllStates};
-            NewEdges ->
-              {OldNodes, OldEdges ++ NewEdges, OldAllStates}
-          end;
-        {function, _, handle_event, 3, Clauses} ->
-          case parse_function(Clauses, handle_event, [async, allstate], gen_fsm) of
-            {error, _Reason} ->
-              {OldNodes, OldEdges, OldAllStates};
-            NewEdges ->
-              {OldNodes, OldEdges, OldAllStates ++ NewEdges}
-          end;
-        {function, _, handle_sync_event, 4, Clauses} ->
-          case parse_function(Clauses, handle_sync_event, [sync, allstate], gen_fsm) of
-            {error, _Reason} ->
-              {OldNodes, OldEdges, OldAllStates};
-            NewEdges ->
-              {OldNodes, OldEdges, OldAllStates ++ NewEdges}
-          end;
-        {function, _, handle_info, 3, Clauses} ->
-          case parse_function(Clauses, handle_info, [async, allstate, info], gen_fsm) of
-             {error, _Reason} ->
-               {OldNodes, OldEdges, OldAllStates};
-             NewEdges ->
-               {OldNodes, OldEdges, OldAllStates ++ NewEdges}
-           end;
-        {function, _, FnName, 2, Clauses} ->
-          %io:format("CLAUSES ~w for ASYNC FUNCTION ~w~n", [Clauses, FnName]),
-           case parse_function(Clauses, FnName, [async], gen_fsm) of
-             {error, _Reason} ->
-               {OldNodes, OldEdges, OldAllStates};
-             NewEdges ->
-              {[FnName|OldNodes], OldEdges ++ NewEdges, OldAllStates}
-             end;
-        {function, _, FnName, 3, Clauses} ->
-          %io:format("CLAUSES ~w for SYNC FUNCTION ~w~n", [Clauses, FnName]),
-          case parse_function(Clauses, FnName, [sync], gen_fsm) of
-            {error, _Reason} ->
-              {OldNodes, OldEdges, OldAllStates};
-            NewEdges ->
-              {[FnName|OldNodes], OldEdges ++ NewEdges, OldAllStates}
+              {OldVerts, OldEdges};
+            {NewVerts, NewEdges} ->
+              {OldVerts ++ NewVerts, OldEdges ++ NewEdges}
           end;
         _Other ->
-          {OldNodes, OldEdges, OldAllStates}
+          {OldVerts, OldEdges}
       end
-    end, {[init, terminate],[],[]}, TokenList),
-  NewAllStateEdges = expand_allstates(AllStateEdges, ['"*"']),%States),
+    end,
+    {[init, terminate], []}, TokenList),
 
-  %io:format("~p~n", [NewAllStateEdges]),
   lists:foreach(fun(Vertex) ->
-                  V = digraph:add_vertex(Graph),
-                  digraph:add_vertex(Graph, V, Vertex)
-                end, lists:usort(['"*"'|States])),
+    V = digraph:add_vertex(Graph),
+    digraph:add_vertex(Graph, V, Vertex)
+                end, lists:usort(Verts)),
+
   lists:foreach(fun(#edge{vertex1 = From, vertex2 = To, edge_data = Data}) ->
-                  digraph:add_edge(Graph, get_vertex(Graph, From), get_vertex(Graph,To), Data)
-                end, remove_dups(Edges ++ NewAllStateEdges)),
+    digraph:add_edge(Graph, get_vertex(Graph, From), get_vertex(Graph,To), Data)
+                end, remove_dups(Edges)),
   {parsed, gen_fsm, Graph}.
 
 parse_gen_event(_TokenList) ->
   {error, not_supported}.
 
-parse_function(Clauses, FnName, Options, Type) ->
+
+parse_gen_fsm__function(Clauses, F=handle_event, _) ->
   Edges = lists:foldl(fun(Clause, AccIn) ->
-               [parse_function_clause(Clause, FnName, Options, Type) | AccIn]
-              end, [], Clauses),
-  FlatEdges = lists:flatten(Edges),
-  %io:format("For function ~p~n", [FnName]),
-  % lists:foreach(fun(E) ->
-  %       io:format(">>> ~p~n", [E])
-  %   end, FlatEdges),
+    [parse_gen_fsm__function_clause(Clause, F, [async, allstate]) | AccIn]
+                      end, [], Clauses),
+  parse_gen_fsm__function_evaluate(Edges);
+parse_gen_fsm__function(Clauses, F=handle_sync_event, _) ->
+  Edges = lists:foldl(fun(Clause, AccIn) ->
+    [parse_gen_fsm__function_clause(Clause, F, [sync, allstate]) | AccIn]
+                      end, [], Clauses),
+  parse_gen_fsm__function_evaluate(Edges);
+parse_gen_fsm__function(Clauses, F=handle_info, _) ->
+  Edges = lists:foldl(fun(Clause, AccIn) ->
+    %% Not sure why we want to have info in options here, but maybe Pawel can tell me
+    [parse_gen_fsm__function_clause(Clause, F, [async, allstate, info]) | AccIn]
+                      end, [], Clauses),
+  parse_gen_fsm__function_evaluate(Edges);
+parse_gen_fsm__function(Clauses, F=init, _) ->
+  Edges = lists:foldl(fun(Clause, AccIn) ->
+    [parse_gen_fsm__function_clause(Clause, F, [async, init]) | AccIn]
+                      end, [], Clauses),
+  parse_gen_fsm__function_evaluate(Edges);
+parse_gen_fsm__function(_, terminate, _) ->
+  {error, non_state};
+parse_gen_fsm__function(Clauses, F, 2) ->
+  Edges = lists:foldl(fun(Clause, AccIn) ->
+    [parse_gen_fsm__function_clause(Clause, F, [async]) | AccIn]
+                      end, [], Clauses),
+  parse_gen_fsm__function_evaluate(Edges);
+parse_gen_fsm__function(Clauses, F, 3) ->
+  Edges = lists:foldl(fun(Clause, AccIn) ->
+    [parse_gen_fsm__function_clause(Clause, F, [sync]) | AccIn]
+                      end, [], Clauses),
+  parse_gen_fsm__function_evaluate(Edges);
+parse_gen_fsm__function(_, _, _) ->
+  {error, non_state}.
 
-  case lists:any(fun (El) -> {error, bad_transition} == El end, Edges) of
+
+parse_gen_fsm__function_evaluate(Edges) ->
+  case lists:any(fun (Element) -> Element=={error, bad_transition} end, Edges) of
     false ->
-      FlatEdges;
+      lists:flatten(Edges);
     true ->
-      {error, not_a_state}
+      {error, no_transition_found}
   end.
+%%parse_gen_fsm__function_clause(Clause, Function, Options) ->
+%%  io:format("CLAUSE:~w~nFUN:~w~nOpts:~w~n~n", [Clause, Function, Options]),
+%%  {error, bad_transition};
 
-parse_function_clause({clause, _Line, Args, Guards, Body}, init, _Options, Type) ->
-  case eval_return(parse_body(Body), Type, []) of
+
+parse_gen_fsm__function_clause({clause, _Line, FunctionArgs, FunctionGuards, Body}, FunctionName, Options) ->
+  PrettyGuards = lists:map(fun(G) -> erl_pp:guard(G) end, FunctionGuards),
+  PrettyBody = erl_pp:exprs(Body),
+  PrettyArgs = erl_pp:exprs(FunctionArgs),
+  case eval_return(parse_gen_fsm__body(Body), []) of
     {error, _Reason} ->
       {error, bad_transition};
-    List ->
+    {conditional, ConditionalFlows} ->
+      lists:map(
+        fun({FromVertex, ToVertex, ConditionType, Condition})->
+          #edge{
+            vertex1 = FromVertex,
+            vertex2 = ToVertex,
+            edge_data = #edge_data{args = PrettyArgs,
+                                   pattern = FunctionArgs,
+                                   guard = PrettyGuards,
+                                   code = PrettyBody,
+                                   attributes = Options}
+            }, ConditionalFlows);
+      List ->
       lists:map(
         fun({ok, NextState, init}) ->
-          PrettyGuards = lists:map(fun(G) -> erl_pp:guard(G) end, Guards),
-          PrettyBody = erl_pp:exprs(Body),
-          PrettyArgs = erl_pp:exprs(Args),
           #edge{
             vertex1 = init,
             vertex2 = NextState,
             edge_data =
             #edge_data{
-              event = "",
               args = PrettyArgs,
-              pattern = Args,
+              pattern = FunctionArgs,
               guard = PrettyGuards,
               code = PrettyBody,
-              attributes = [async]}
+              attributes = Options}
           }
         end, List)
   end;
-parse_function_clause({clause, _Line, [Event | Args], Guards, Body}, handle_info, Options, Type) ->
-  case eval_return(parse_body(Body), Type, []) of
+parse_gen_fsm__function_clause({clause, _Line, [Event | Args], Guards, Body}, handle_info, Options) ->
+  case eval_return(parse_gen_fsm__body(Body), []) of
     {error, _Reason} ->
       {error, bad_transition};
     List ->
@@ -303,8 +310,8 @@ parse_function_clause({clause, _Line, [Event | Args], Guards, Body}, handle_info
           }
         end, List)
   end;
-parse_function_clause({clause, _Line, [Event | Args], Guards, Body}, FnName, Options, Type) ->
-  case eval_return(parse_body(Body), Type, []) of
+parse_gen_fsm__function_clause({clause, _Line, [Event | Args], Guards, Body}, FnName, Options) ->
+  case eval_return(parse_gen_fsm__body(Body), []) of
     {error, _Reason} ->
       {error, bad_transition};
     List ->
@@ -332,13 +339,12 @@ parse_function_clause({clause, _Line, [Event | Args], Guards, Body}, FnName, Opt
 %process_body({ok. PrevState, NextState, }) ->
 
 
-parse_body(Body) ->
-  parse_body(Body, []).
+parse_gen_fsm__body(Body) ->
+  parse_gen_fsm__body(Body, []).
 
-parse_body([Statement|Rest], Acc) ->
-  parse_body(Rest, Acc ++ [parse_statement(Statement)]);
-parse_body([], Acc) ->
-%%   io:format("~p~n", [Acc]),
+parse_gen_fsm__body([Statement|Rest], Acc) ->
+  parse_gen_fsm__body(Rest, Acc ++ [parse_statement(Statement)]);
+parse_gen_fsm__body([], Acc) ->
   lists:flatten([Acc]).
 
 parse_statement({tuple, Line, Elems}) ->
@@ -360,32 +366,32 @@ parse_statement(_Statement) ->
   [].
 
 
-eval_return([ReturnVal|Rest], gen_fsm, Acc) ->
+eval_return([ReturnVal|Rest], Acc) ->
   case eval_tuple(ReturnVal) of
     {ok, {ok, NextState, _Data}} ->
-      eval_return(Rest, gen_fsm, [{ok, NextState, init}|Acc]);
+      eval_return(Rest, [{ok, NextState, init}|Acc]);
     {ok, {ok, NextState, _Data, _Timeout}} ->
-      eval_return(Rest, gen_fsm, [{ok, NextState, init}|Acc]);
+      eval_return(Rest, [{ok, NextState, init}|Acc]);
     {ok, {stop, _Reason}} ->
-      eval_return(Rest, gen_fsm, [{ok, terminate, init}|Acc]);
+      eval_return(Rest, [{ok, terminate, init}|Acc]);
     {ok, {reply, _Reply, NextState, _Data}} ->
-      eval_return(Rest, gen_fsm, [{ok, NextState, sync}|Acc]);
+      eval_return(Rest, [{ok, NextState, sync}|Acc]);
     {ok, {reply, _Reply, NextState, _Data, _Timeout}} ->
-      eval_return(Rest, gen_fsm, [{ok, NextState, sync}|Acc]);
+      eval_return(Rest, [{ok, NextState, sync}|Acc]);
     {ok, {stop, _Reason, _Reply, _Data}} ->
-      eval_return(Rest, gen_fsm, [{ok, terminate, sync}|Acc]);
+      eval_return(Rest, [{ok, terminate, sync}|Acc]);
     {ok, {next_state, NextState, _Data}} ->
-      eval_return(Rest, gen_fsm, [{ok, NextState, async}|Acc]);
+      eval_return(Rest, [{ok, NextState, async}|Acc]);
     {ok, {next_state, NextState, _Data, _Timeout}} ->
-      eval_return(Rest, gen_fsm, [{ok, NextState, async}|Acc]);
+      eval_return(Rest, [{ok, NextState, async}|Acc]);
     {ok, {stop, _Reason, _Data}} ->
-      eval_return(Rest, gen_fsm, [{ok, terminate, async}|Acc]);
+      eval_return(Rest, [{ok, terminate, async}|Acc]);
     _Other ->
-      eval_return(Rest, gen_fsm, Acc)
+      eval_return(Rest, Acc)
   end;
-eval_return([], _, []) ->
+eval_return([], []) ->
   {error, badreturn};
-eval_return([], _, Acc) ->
+eval_return([], Acc) ->
   Acc.
 
 

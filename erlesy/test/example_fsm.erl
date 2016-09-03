@@ -75,7 +75,6 @@ handle_event(_HandleEvent, StateName, State) ->
       {next_state, StateName, State}
   end.
 
-
 handle_sync_event(_HandleSyncEvent, _From, StateName, State) ->
   Reply = ok,
   {reply, Reply, StateName, State}.

@@ -163,42 +163,52 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-
-
 parse_gen_server(_TokenList) ->
   {error, not_supported}.
 
 parse_gen_fsm(TokenList) ->
   Graph = digraph:new(),
-  {Verts, Edges} = lists:foldl(
-    fun(Token, {OldVerts, OldEdges}) ->
+  Edges = lists:foldl(
+    fun(Token, OldEdges) ->
       case Token of
         {function, _, FunctionName, ParamCount, Clauses} ->
-
           case parse_gen_fsm__function(Clauses, FunctionName, ParamCount) of
             {error, _Reason} ->
-              {OldVerts, OldEdges};
-            {NewVerts, NewEdges} ->
-              {OldVerts ++ NewVerts, OldEdges ++ NewEdges}
+              OldEdges;
+            NewEdges ->
+              OldEdges ++ NewEdges
           end;
         _Other ->
-          {OldVerts, OldEdges}
+          OldEdges
       end
     end,
-    {[init, terminate], []}, TokenList),
+    [], TokenList),
+
+  Verts = lists:usort([#vertex{name=init, type=state},
+           #vertex{name=terminate, type=state} |
+           get_verts_from_edges(Edges, [])]),
+
+  expand_allstates(Edges, Verts),
 
   lists:foreach(fun(Vertex) ->
+    io:format("Vert: ~w~n", [Vertex]),
     V = digraph:add_vertex(Graph),
     digraph:add_vertex(Graph, V, Vertex)
                 end, lists:usort(Verts)),
 
   lists:foreach(fun(#edge{vertex1 = From, vertex2 = To, edge_data = Data}) ->
+    io:format("Edge: From ~w To ~w ~n", [From, To]),
     digraph:add_edge(Graph, get_vertex(Graph, From), get_vertex(Graph,To), Data)
                 end, remove_dups(Edges)),
   {parsed, gen_fsm, Graph}.
 
 parse_gen_event(_TokenList) ->
   {error, not_supported}.
+
+get_verts_from_edges([], Acc) ->
+  Acc;
+get_verts_from_edges([#edge{vertex1 = V1, vertex2 = V2} | Rest], Acc) ->
+  get_verts_from_edges(Rest, [V1, V2 | Acc]).
 
 
 parse_gen_fsm__function(Clauses, F=handle_event, _) ->
@@ -221,6 +231,7 @@ parse_gen_fsm__function(Clauses, F=init, _) ->
   Edges = lists:foldl(fun(Clause, AccIn) ->
     [parse_gen_fsm__function_clause(Clause, F, [async, init]) | AccIn]
                       end, [], Clauses),
+  io:format("Init done ~w~n", [Edges]),
   parse_gen_fsm__function_evaluate(Edges);
 parse_gen_fsm__function(_, terminate, _) ->
   {error, non_state};
@@ -250,91 +261,48 @@ parse_gen_fsm__function_evaluate(Edges) ->
 %%  {error, bad_transition};
 
 
-parse_gen_fsm__function_clause({clause, _Line, FunctionArgs, FunctionGuards, Body}, FunctionName, Options) ->
-  PrettyGuards = lists:map(fun(G) -> erl_pp:guard(G) end, FunctionGuards),
-  PrettyBody = erl_pp:exprs(Body),
-  PrettyArgs = erl_pp:exprs(FunctionArgs),
-  case eval_return(parse_gen_fsm__body(Body), []) of
+parse_gen_fsm__function_clause({clause, _Line, FunctionArgs=[FunctionEvent | _Args],
+                                FunctionGuards, FunctionBody}, FunctionName, Options) ->
+  case eval_return(parse_gen_fsm__body(FunctionBody), []) of
     {error, _Reason} ->
       {error, bad_transition};
     {conditional, ConditionalFlows} ->
       lists:map(
-        fun({FromVertex, ToVertex, ConditionType, Condition})->
+        fun({FromVertex, FromType, FromLine, ToVertex, ToType, ToLine, ConditionalPattern,
+             ConditionalGuards, ConditionalBody})->
+          PrettyConditionalPattern = erl_pp:exprs(ConditionalPattern),
+          PrettyConditionalGuards = lists:map(fun(G) -> erl_pp:guard(G) end, ConditionalGuards),
+          PrettyConditionalBody = erl_pp:exprs(ConditionalBody),
           #edge{
-            vertex1 = FromVertex,
-            vertex2 = ToVertex,
-            edge_data = #edge_data{args = PrettyArgs,
-                                   pattern = FunctionArgs,
-                                   guard = PrettyGuards,
-                                   code = PrettyBody,
-                                   attributes = Options}
-            }, ConditionalFlows);
+            vertex1 = #vertex{name=FromVertex, type=FromType, line=FromLine},
+            vertex2 = #vertex{name=ToVertex, type=ToType, line=ToLine},
+            edge_data = #edge_data{pattern = PrettyConditionalPattern,
+                                   guard = PrettyConditionalGuards,
+                                   code = PrettyConditionalBody}
+            }
+        end, ConditionalFlows);
       List ->
+        PrettyGuards = lists:map(fun(G) -> erl_pp:guard(G) end, FunctionGuards),
+        PrettyBody = erl_pp:exprs(FunctionBody),
+        PrettyEvent = erl_pp:expr(FunctionEvent),
+        PrettyArgs = erl_pp:exprs(FunctionArgs),
       lists:map(
-        fun({ok, NextState, init}) ->
+        fun({ok, NextState, RetType}) ->
           #edge{
-            vertex1 = init,
-            vertex2 = NextState,
+            vertex1 = #vertex{name=FunctionName, type=state},
+            vertex2 = #vertex{name=NextState, type=state},
             edge_data =
             #edge_data{
+              event = PrettyEvent,
               args = PrettyArgs,
               pattern = FunctionArgs,
               guard = PrettyGuards,
               code = PrettyBody,
-              attributes = Options}
-          }
-        end, List)
-  end;
-parse_gen_fsm__function_clause({clause, _Line, [Event | Args], Guards, Body}, handle_info, Options) ->
-  case eval_return(parse_gen_fsm__body(Body), []) of
-    {error, _Reason} ->
-      {error, bad_transition};
-    List ->
-      lists:map(
-        fun({ok, NextState, RetType}) ->
-          PrettyGuards = lists:map(fun(G) -> erl_pp:guard(G) end, Guards),
-          PrettyBody = erl_pp:exprs(Body),
-          PrettyEvent = erl_pp:expr(Event),
-          PrettyArgs = erl_pp:exprs(Args),
-          #edge{
-            vertex1 = handle_info,
-            vertex2 = NextState,
-            edge_data =
-            #edge_data{
-              event = PrettyEvent,
-              args = PrettyArgs,
-              pattern = Args,
-              guard = PrettyGuards,
-              code = PrettyBody,
-              attributes = [RetType|Options]}
-          }
-        end, List)
-  end;
-parse_gen_fsm__function_clause({clause, _Line, [Event | Args], Guards, Body}, FnName, Options) ->
-  case eval_return(parse_gen_fsm__body(Body), []) of
-    {error, _Reason} ->
-      {error, bad_transition};
-    List ->
-      lists:map(
-        fun({ok, NextState, _}) ->
-          PrettyGuards = lists:map(fun(G) -> erl_pp:guard(G) end, Guards),
-          PrettyBody = erl_pp:exprs(Body),
-          PrettyEvent = erl_pp:expr(Event),
-          PrettyArgs = erl_pp:exprs(Args),
-          #edge{
-            vertex1 = FnName,
-            vertex2 = NextState,
-            edge_data =
-            #edge_data{
-              event = PrettyEvent,
-              args = PrettyArgs,
-              pattern = Args,
-              guard = PrettyGuards,
-              code = PrettyBody,
-              attributes = Options}
+              attributes = remove_dups([RetType|Options])}
           }
         end, List)
   end.
+
 
 %process_body({ok. PrevState, NextState, }) ->
 
@@ -349,8 +317,8 @@ parse_gen_fsm__body([], Acc) ->
 
 parse_statement({tuple, Line, Elems}) ->
   {tuple, Line, Elems};
-parse_statement(S={'case', Line, Op, Clauses}) ->
-  io:format("Nick wants: ~w~n", [{'case', Line, Op, Clauses}]),
+parse_statement(S={'case', _Line, Op, Clauses}) ->
+  %%io:format("Nick wants: ~w~n", [{'case', Line, Op, Clauses}]),
   lists:map(fun(Index) ->
     parse_statement(element(Index, S))
             end, lists:seq(1, size(S)));
@@ -397,7 +365,6 @@ eval_return([], Acc) ->
 
 eval_tuple({tuple, Line, Elements})->
   ClearElements = lists:map(fun(Element) ->
-%%     io:format("NOW PROCESSING: ~p~n", [Element]),
     case Element of
       {atom, RLine, Atom} ->
         {atom, RLine, Atom};
@@ -412,9 +379,13 @@ eval_tuple(_Other)->
   {error, not_a_tuple}.
 
 expand_allstates(Edges, States) ->
-  ClearStates = lists:delete(init, lists:delete(terminate, States)),
+  io:format("Edges = ~p~n", [Edges]),
+  ClearStates = lists:keydelete(init, #vertex.name, lists:keydelete(terminate, #vertex.name, States)),
+  ClearEdges = [E || #edge{vertex1 = #vertex{name = V1}} = E <- Edges,
+                V1 == handle_event orelse V1 == handle_sync_event orelse V1 == handle_info],
+  io:format("ClearEdges = ~p~n", [[CE#edge{edge_data = undefined} || CE <- ClearEdges]]),
   lists:foldl(fun(Edge, Acc) ->
-    #edge{vertex1 = FnName, vertex2 = To, edge_data = Data} = Edge,
+    #edge{vertex1 = #vertex{name=FnName}, vertex2 = #vertex{name=To}, edge_data = Data} = Edge,
     StateIndex = case FnName of
                    handle_event ->  1;
                    handle_sync_event -> 2;
@@ -423,27 +394,32 @@ expand_allstates(Edges, States) ->
     case To of
       '@var' ->
         case lists:nth(StateIndex, Data#edge_data.pattern) of
-          {atom, _line, StateFrom} ->
+          {atom, _Line, StateFrom} ->
             Acc ++ lists:map(fun(State) ->
-              #edge{vertex1 = StateFrom, vertex2 = State, edge_data = Data}
+              #edge{vertex1 = #vertex{name=StateFrom, type=state},
+                    vertex2 = #vertex{name=State, type=state}, edge_data = Data}
             end, ClearStates);
           _ ->
             Acc ++ lists:map(fun(State) ->
-              #edge{vertex1 = State, vertex2 = State, edge_data = Data}
+              #edge{vertex1 = #vertex{name=State, type=state},
+                    vertex2 = #vertex{name=State, type=state},
+                    edge_data = Data}
             end, ClearStates)
         end;
       Other ->
         case lists:nth(StateIndex, Data#edge_data.pattern) of
-          {atom, _line, StateFrom} ->
+          {atom, _Line, StateFrom} ->
             Acc ++
-              [#edge{vertex1 = StateFrom, vertex2 = Other, edge_data = Data}];
+              [#edge{vertex1 = #vertex{name=StateFrom, type=state},
+                     vertex2 = #vertex{name=Other, type=state}, edge_data = Data}];
           _ ->
             Acc ++ lists:map(fun(State) ->
-              #edge{vertex1 = State, vertex2 = Other, edge_data = Data}
+              #edge{vertex1 = #vertex{name=State, type=state},
+                    vertex2 = #vertex{name=Other, type=state}, edge_data = Data}
             end, ClearStates)
         end
     end
-  end, [], Edges).
+  end, [], ClearEdges).
 
 get_vertex(Graph, Label) ->
   Vertices = digraph:vertices(Graph),

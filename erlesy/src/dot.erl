@@ -26,9 +26,9 @@ edges_to_dot(G, [E|T]) ->
     {_, VLabel2} = digraph:vertex(G, V2),
   case EdgeLabel#edge_data.guard of
     [] ->
-      R= io_lib:format("~s",[EdgeLabel#edge_data.event]);
+      R= io_lib:format("~s",[filter_newline(lists:flatten(EdgeLabel#edge_data.event))]);
     Guard ->
-      R= io_lib:format("~s [~s]",[EdgeLabel#edge_data.event, Guard])
+      R= io_lib:format("~s [~s]",[filter_newline(lists:flatten(EdgeLabel#edge_data.event)), Guard])
   end,
 
   %EdgePretty=lists:flatten(R),

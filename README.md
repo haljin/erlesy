@@ -6,8 +6,8 @@ ErlEsy is a simple graphing tool for Erlang. It allows for automatic generation 
 
 ErlEsy can be build by rebar, simply invoke
 
-```rebar get-deps
-rebar compile```
+`rebar get-deps`
+`rebar compile`
 
 ## Running 
 
@@ -17,9 +17,8 @@ To run ErlEsy simply start the application by calling
 
 Then you can create any file by using
 
-```
--spec create_graph(string(), [string()], dot | json) -> ok.
-otp_parser:create_graph(FileName, IncludeFiles, Mode).```
+`-spec create_graph(string(), [string()], dot | json) -> ok.`
+`otp_parser:create_graph(FileName, IncludeFiles, Mode).`
 
 * FileName should be a path to the .erl file you want to graph
 * IncludeFiles is a list of paths towards include files

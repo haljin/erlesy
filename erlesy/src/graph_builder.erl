@@ -299,7 +299,7 @@ parse_function_clause({clause, _Line, Args, Guards, Body},
               attributes = [async]}
           }
         end,
-  map_parse_func(Fun, Body, Type);
+  map_parse_func(Fun, init, Body, Type);
 parse_function_clause({clause, _Line, [Event | Args], Guards, Body},
                       handle_info, Options, gen_fsm) ->
   Fun = fun({ok, NextState, RetType}) ->
@@ -320,7 +320,28 @@ parse_function_clause({clause, _Line, [Event | Args], Guards, Body},
               attributes = [RetType|Options]}
           }
         end,
-  map_parse_func(Fun, Body, gen_fsm);
+  map_parse_func(Fun, handle_info, Body, gen_fsm);
+parse_function_clause({clause, _Line, [_EventType, State, Event | Args], Guards, Body},
+                      handle_event, Options, gen_statem) ->
+  Fun = fun({ok, NextState, RetType}) ->
+          PrettyGuards = lists:map(fun(G) -> erl_pp:guard(G) end, Guards),
+          PrettyBody = erl_pp:exprs(Body),
+          PrettyEvent = erl_pp:expr(Event),
+          PrettyArgs = erl_pp:exprs(Args),
+          #edge{
+            vertex1 = State,
+            vertex2 = NextState,
+            edge_data =
+            #edge_data{
+              event = PrettyEvent,
+              args = PrettyArgs,
+              pattern = Args,
+              guard = PrettyGuards,
+              code = PrettyBody,
+              attributes = [RetType|Options]}
+          }
+        end,
+  map_parse_func(Fun, handle_info, Body, gen_fsm);
 parse_function_clause({clause, _Line, [Event | Args], Guards, Body},
                       FnName, Options, gen_fsm) ->
   Fun = fun({ok, NextState, _}) ->
@@ -341,7 +362,7 @@ parse_function_clause({clause, _Line, [Event | Args], Guards, Body},
               attributes = Options}
           }
         end,
-  map_parse_func(Fun, Body, gen_fsm);
+  map_parse_func(Fun, FnName, Body, gen_fsm);
 parse_function_clause({clause, _Line, [_Call, Event | Args], Guards, Body},
                       FnName, Options, gen_statem) ->
   Fun = fun({ok, NextState, _}) ->
@@ -362,12 +383,12 @@ parse_function_clause({clause, _Line, [_Call, Event | Args], Guards, Body},
               attributes = Options}
           }
         end,
-  map_parse_func(Fun, Body, gen_statem).
+  map_parse_func(Fun, FnName, Body, gen_statem).
 
 %process_body({ok. PrevState, NextState, }) ->
 
-map_parse_func(Fun, Body, Type) ->
-  case eval_return(parse_body(Body), Type, []) of
+map_parse_func(Fun, State, Body, Type) ->
+  case eval_return(State, parse_body(Body), Type, []) of
     {error, _Reason} ->
       {error, bad_transition};
     List ->
@@ -397,41 +418,67 @@ parse_statement(_Statement) ->
   [].
 
 
-eval_return([ReturnVal|Rest], gen_fsm, Acc) ->
+eval_return(State, [ReturnVal|Rest], gen_fsm, Acc) ->
   case eval_tuple(ReturnVal) of
     {ok, {ok, NextState, _Data}} ->
-      eval_return(Rest, gen_fsm, [{ok, NextState, init}|Acc]);
+      eval_return(State, Rest, gen_fsm, [{ok, NextState, init}|Acc]);
     {ok, {ok, NextState, _Data, _Timeout}} ->
-      eval_return(Rest, gen_fsm, [{ok, NextState, init}|Acc]);
+      eval_return(State, Rest, gen_fsm, [{ok, NextState, init}|Acc]);
     {ok, {stop, _Reason}} ->
-      eval_return(Rest, gen_fsm, [{ok, terminate, init}|Acc]);
+      eval_return(State, Rest, gen_fsm, [{ok, terminate, init}|Acc]);
     {ok, {reply, _Reply, NextState, _Data}} ->
-      eval_return(Rest, gen_fsm, [{ok, NextState, sync}|Acc]);
+      eval_return(State, Rest, gen_fsm, [{ok, NextState, sync}|Acc]);
     {ok, {reply, _Reply, NextState, _Data, _Timeout}} ->
-      eval_return(Rest, gen_fsm, [{ok, NextState, sync}|Acc]);
+      eval_return(State, Rest, gen_fsm, [{ok, NextState, sync}|Acc]);
     {ok, {stop, _Reason, _Reply, _Data}} ->
-      eval_return(Rest, gen_fsm, [{ok, terminate, sync}|Acc]);
+      eval_return(State, Rest, gen_fsm, [{ok, terminate, sync}|Acc]);
     {ok, {next_state, NextState, _Data}} ->
-      eval_return(Rest, gen_fsm, [{ok, NextState, async}|Acc]);
+      eval_return(State, Rest, gen_fsm, [{ok, NextState, async}|Acc]);
     {ok, {next_state, NextState, _Data, _Timeout}} ->
-      eval_return(Rest, gen_fsm, [{ok, NextState, async}|Acc]);
+      eval_return(State, Rest, gen_fsm, [{ok, NextState, async}|Acc]);
     {ok, {stop, _Reason, _Data}} ->
-      eval_return(Rest, gen_fsm, [{ok, terminate, async}|Acc]);
+      eval_return(State, Rest, gen_fsm, [{ok, terminate, async}|Acc]);
     _Other ->
-      eval_return(Rest, gen_fsm, Acc)
+      eval_return(State, Rest, gen_fsm, Acc)
   end;
-eval_return([ReturnVal|Rest], gen_statem, Acc) ->
+eval_return(State, [ReturnVal|Rest], gen_statem, Acc) ->
   case eval_tuple(ReturnVal) of
+    {ok, {ok, NextState, _Data}} ->
+      eval_return(State, Rest, gen_statem, [{ok, NextState, init}|Acc]);
+    {ok, {ok, NextState, _Data, _Actions}} ->
+      eval_return(State, Rest, gen_statem, [{ok, NextState, init}|Acc]);
+    {ok, ignore} ->
+      eval_return(State, Rest, gen_statem, [{ok, terminate, init}|Acc]);
+
+    {ok, stop} ->
+      eval_return(State, Rest, gen_statem, [{ok, terminate, async}|Acc]);
+    {ok, {stop, _Reason}} ->
+      eval_return(State, Rest, gen_statem, [{ok, terminate, async}|Acc]);
+    {ok, {stop, _Reason, _NewData}} ->
+      eval_return(State, Rest, gen_statem, [{ok, terminate, async}|Acc]);
+    {ok, {stop_and_reply, _Reason, _Replies}} ->
+      eval_return(State, Rest, gen_statem, [{ok, terminate, async}|Acc]);
+    {ok, {stop_and_reply, _Reason, _Replies, _NewData}} ->
+      eval_return(State, Rest, gen_statem, [{ok, terminate, async}|Acc]);
+
     {ok, {next_state, NextState, _Data}} ->
-      eval_return(Rest, gen_statem, [{ok, NextState, async}|Acc]);
+      eval_return(State, Rest, gen_statem, [{ok, NextState, async}|Acc]);
     {ok, {next_state, NextState, _Data, _Actions}} ->
-      eval_return(Rest, gen_statem, [{ok, NextState, async}|Acc]);
+      eval_return(State, Rest, gen_statem, [{ok, NextState, async}|Acc]);
+    {ok, {keep_state, _NewData}} ->
+      eval_return(State, Rest, gen_statem, [{ok, State, async}|Acc]);
+    {ok, {keep_state, _NewData, _Actions}} ->
+      eval_return(State, Rest, gen_statem, [{ok, State, async}|Acc]);
+    {ok, keep_state_and_data} ->
+      eval_return(State, Rest, gen_statem, [{ok, State, async}|Acc]);
+    {ok, {keep_state_and_data, _Actions}} ->
+      eval_return(State, Rest, gen_statem, [{ok, State, async}|Acc]);
     _Other ->
-      eval_return(Rest, gen_statem, Acc)
+      eval_return(State, Rest, gen_statem, Acc)
   end;
-eval_return([], _, []) ->
+eval_return(_, [], _, []) ->
   {error, badreturn};
-eval_return([], _, Acc) ->
+eval_return(_, [], _, Acc) ->
   Acc.
 
 

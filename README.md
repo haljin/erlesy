@@ -9,6 +9,11 @@ ErlEsy can be build by rebar, simply invoke
 `rebar get-deps`
 `rebar compile`
 
+You can also use the makefile, with these directives:
+`make` - fetches deps and compiles erlesy
+`make shell` - starts a erlesy shell
+`make http` - starts hosting erlesy_vis with python
+
 ## Running 
 
 To run ErlEsy simply start the application by calling

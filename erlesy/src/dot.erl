@@ -7,7 +7,7 @@
 -export([digraph_to_dot/2, digraph_to_plantuml/2, filter_newline/1]).
 
 digraph_to_dot(Name, G) ->
-    "digraph " ++ Name ++ " { \n" ++
+    "digraph \"" ++ Name ++ "\" { \n" ++
     %% These next few elements are added as they look a bit nicer in http://www.webgraphviz.com for the test,
     %% @TODO make these dynamic based on the diagraph data to beautify the display
     "rankdir=LR;\n" ++
@@ -39,7 +39,7 @@ edges_to_dot(G, [E|T]) ->
 
 
 digraph_to_plantuml(_Name, G) ->
-  "@startuml\n"  ++ 
+  "@startuml\n"  ++
     edges_to_plantuml(G, digraph:edges(G)) ++
     "@enduml".
 

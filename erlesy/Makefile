@@ -30,3 +30,6 @@ buildplt: setup_dialyzer
 
 checkplt: buildplt
 	rebar skip_deps=true check-plt
+	
+eunit:
+	rebar skip_deps=true eunit

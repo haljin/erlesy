@@ -5,7 +5,8 @@
   {registered, [graph_builder, otp_parser_sup]},
   {applications, [
     kernel,
-    stdlib
+    stdlib,
+    jsx
   ]},
   {mod, {otp_parser_app, []}},
   {env, []}

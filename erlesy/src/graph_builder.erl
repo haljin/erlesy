@@ -27,8 +27,8 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
- parse_file(File, Includes) ->
-   gen_server:call(?MODULE, {parse_file, File, Includes}).
+ parse_file(File, IncludePaths) ->
+   gen_server:call(?MODULE, {parse_file, File, IncludePaths}).
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -81,8 +81,8 @@ init([]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call({parse_file, File, Includes}, _From, State) ->
-  {ok, ParsedFile} = epp:parse_file(File, Includes, []),
+handle_call({parse_file, File, IncludePaths}, _From, State) ->
+  {ok, ParsedFile} = epp:parse_file(File, IncludePaths, []),
   Behaviour = lists:keyfind(behaviour, 3, ParsedFile),
   Behavior = lists:keyfind(behavior, 3, ParsedFile),
   Reply = case Behaviour of
